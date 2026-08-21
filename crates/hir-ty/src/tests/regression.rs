@@ -3193,3 +3193,39 @@ fn main() {
     "#,
     );
 }
+
+#[test]
+fn issue_23124_atpit_hidden_type_with_method_generic_does_not_panic() {
+    check_no_mismatches(
+        r#"
+        //- minicore: copy
+        trait Bar {
+            type E: Copy;
+
+            fn foo<T>() -> Self::E;
+        }
+
+        impl<S> Bar for S {
+            type E = impl Copy;
+
+            fn foo<T>() -> Self::E {
+                || ()
+            }
+        }
+
+        trait ValidBar {
+            type E: Copy;
+
+            fn foo() -> Self::E;
+        }
+
+        impl<S> ValidBar for S {
+            type E = impl Copy;
+
+            fn foo() -> Self::E {
+                || ()
+            }
+        }
+        "#,
+    );
+}

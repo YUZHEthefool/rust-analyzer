@@ -1,13 +1,14 @@
 //! Defining opaque types via inference.
 
-use rustc_type_ir::{TypeVisitableExt, fold_regions};
+use rustc_type_ir::{GenericArgKind, TypeVisitableExt, fold_regions, inherent::IntoKind};
 use tracing::{debug, instrument};
 
 use crate::{
     Span,
     infer::InferenceContext,
     next_solver::{
-        EarlyBinder, OpaqueTypeKey, SolverDefId, TypingMode,
+        ConstKind, EarlyBinder, GenericArgs, OpaqueTypeKey, RegionKind, SolverDefId, Ty, TyKind,
+        TypingMode,
         infer::{opaque_types::OpaqueHiddenType, traits::ObligationCause},
     },
 };
@@ -63,6 +64,29 @@ impl<'db> UsageKind<'db> {
     }
 }
 
+fn hidden_type_args_compatible<'db>(ty: Ty<'db>, args: GenericArgs<'db>) -> bool {
+    ty.walk().all(|arg| match arg.kind() {
+        GenericArgKind::Type(ty) => match ty.kind() {
+            TyKind::Param(param) => args
+                .get(param.index as usize)
+                .is_some_and(|arg| matches!(arg.kind(), GenericArgKind::Type(_))),
+            _ => true,
+        },
+        GenericArgKind::Const(konst) => match konst.kind() {
+            ConstKind::Param(param) => args
+                .get(param.index as usize)
+                .is_some_and(|arg| matches!(arg.kind(), GenericArgKind::Const(_))),
+            _ => true,
+        },
+        GenericArgKind::Lifetime(region) => match region.kind() {
+            RegionKind::ReEarlyParam(param) => args
+                .get(param.index as usize)
+                .is_some_and(|arg| matches!(arg.kind(), GenericArgKind::Lifetime(_))),
+            _ => true,
+        },
+    })
+}
+
 impl<'db> InferenceContext<'db> {
     fn compute_definition_site_hidden_types(
         &mut self,
@@ -103,6 +127,14 @@ impl<'db> InferenceContext<'db> {
             }
 
             if let UsageKind::HasDefiningUse(ty) = usage_kind {
+                if opaque_types.iter().any(|&(opaque_type_key, hidden_type)| {
+                    opaque_type_key.def_id == def_id.into()
+                        && !hidden_type_args_compatible(hidden_type.ty, opaque_type_key.args)
+                }) {
+                    self.result.type_of_opaque.insert(def_id, self.types.types.error.store());
+                    continue;
+                }
+
                 for &(opaque_type_key, hidden_type) in &opaque_types {
                     if opaque_type_key.def_id != def_id.into() {
                         continue;
