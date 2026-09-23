@@ -343,7 +343,12 @@ pub struct DbInterner<'db> {
     pub(crate) db: &'db dyn HirDatabase,
     krate: Option<Crate>,
     lang_items: Option<&'db LangItems>,
+    pub(crate) recursion_limit: usize,
 }
+
+// Defaults to 128 in rustc:
+// https://github.com/rust-lang/rust/blob/28e8a8c81bf3b37909edac6c2a76e56f30cd492f/compiler/rustc_interface/src/limits.rs#L33
+const DEFAULT_RECURSION_LIMIT: usize = 128;
 
 // FIXME: very wrong, see https://github.com/rust-lang/rust/pull/144808
 unsafe impl Send for DbInterner<'_> {}
@@ -358,6 +363,7 @@ impl<'db> DbInterner<'db> {
             db: unsafe { std::mem::transmute::<&dyn HirDatabase, &'db dyn HirDatabase>(db) },
             krate: None,
             lang_items: None,
+            recursion_limit: DEFAULT_RECURSION_LIMIT,
         })
     }
 
@@ -368,17 +374,19 @@ impl<'db> DbInterner<'db> {
     pub fn new_no_crate(db: &'db dyn HirDatabase) -> Self {
         // We do not reinit the cache here, since anything accessing the cache needs an InferCtxt,
         // and we panic when trying to construct an InferCtxt for an Interner without a crate.
-        DbInterner { db, krate: None, lang_items: None }
+        DbInterner { db, krate: None, lang_items: None, recursion_limit: DEFAULT_RECURSION_LIMIT }
     }
 
     pub fn new_with(db: &'db dyn HirDatabase, krate: Crate) -> DbInterner<'db> {
         tls_cache::reinit_cache(db);
+        let recursion_limit = hir_def::nameres::crate_def_map(db, krate).recursion_limit() as usize;
         DbInterner {
             db,
             krate: Some(krate),
             // As an approximation, when we call `new_with` we're trait solving, therefore we need the lang items.
             // This is also convenient since here we have a starting crate but not in `new_no_crate`.
             lang_items: Some(hir_def::lang_item::lang_items(db, krate)),
+            recursion_limit,
         }
     }
 
@@ -1240,7 +1248,9 @@ impl<'db> Interner for DbInterner<'db> {
     }
 
     fn recursion_limit(self) -> usize {
-        50
+        // Note that rustc actually allows a larger recursion limit in some cases:
+        // https://github.com/rust-lang/rust/blob/28e8a8c81bf3b37909edac6c2a76e56f30cd492f/compiler/rustc_next_trait_solver/src/solve/eval_ctxt/mod.rs#L335
+        self.recursion_limit
     }
 
     fn is_type_const(self, _def_id: Self::DefId) -> bool {
