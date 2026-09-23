@@ -25,8 +25,6 @@ use crate::{
     },
 };
 
-const AUTODEREF_RECURSION_LIMIT: usize = 20;
-
 /// Returns types that `ty` transitively dereferences to. This function is only meant to be used
 /// outside `hir-ty`.
 ///
@@ -52,8 +50,8 @@ pub fn autoderef<'db>(
         // If the deref chain contains a cycle (e.g. `A` derefs to `B` and `B` derefs to `A`), we
         // would revisit some already visited types. Stop here to avoid duplication.
         //
-        // XXX: The recursion limit for `Autoderef` is currently 20, so `Vec::contains()` shouldn't
-        // be too expensive. Replace this duplicate check with `FxHashSet` if it proves to be more
+        // XXX: The recursion limit is usually low enough that `Vec::contains()` shouldn't be too
+        // expensive. Replace this duplicate check with `FxHashSet` if it proves to be more
         // performant.
         if v.contains(&resolved) {
             break;
@@ -157,6 +155,7 @@ pub(crate) struct GeneralAutoderef<'db, Ctx, Steps = Vec<(Ty<'db>, AutoderefKind
     // Configurations:
     include_raw_pointers: bool,
     use_receiver_trait: bool,
+    recursion_limit: usize,
     span: Span,
 }
 
@@ -181,7 +180,7 @@ where
         }
 
         // If we have reached the recursion limit, error gracefully.
-        if self.state.steps.len() >= AUTODEREF_RECURSION_LIMIT {
+        if self.state.steps.len() >= self.recursion_limit {
             self.state.reached_recursion_limit = true;
             return None;
         }
@@ -275,6 +274,7 @@ where
 {
     #[inline]
     fn new_impl(ctx: Ctx, base_ty: Ty<'db>, span: Span) -> Self {
+        let recursion_limit = ctx.infcx().interner.recursion_limit;
         GeneralAutoderef {
             state: AutoderefSnapshot {
                 steps: Steps::default(),
@@ -287,6 +287,7 @@ where
             traits: None,
             include_raw_pointers: false,
             use_receiver_trait: false,
+            recursion_limit,
             span,
         }
     }
